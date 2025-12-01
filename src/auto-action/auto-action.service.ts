@@ -1,11 +1,15 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
 } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { SolutionDto } from './dto/solution.dto';
 import { StepDto } from './dto/step.dto';
+import { ExecutionRequestDto } from './dto/execution-request.dto';
 import { CommandExecutorService } from './command-executor.service';
 import {
   SolutionExecutionResult,
@@ -18,22 +22,28 @@ import {
 
 @Injectable()
 export class AutoActionService {
+  private readonly logger = new Logger(AutoActionService.name);
+
   constructor(
     private readonly executor: CommandExecutorService,
+    private readonly httpService: HttpService,
   ) {}
 
   async executeAll(
-    rawSolutions: any,
+    rawRequests: any,
   ): Promise<SolutionExecutionResult[]> {
-    if (!Array.isArray(rawSolutions) || rawSolutions.length === 0) {
+    if (!Array.isArray(rawRequests) || rawRequests.length === 0) {
       throw new BadRequestException(
-        'Request body must be a non-empty array of Solution objects',
+        'Request body must be a non-empty array of execution requests',
       );
     }
 
-    const solutions: SolutionDto[] = [];
-    for (let i = 0; i < rawSolutions.length; i++) {
-      const instance = plainToInstance(SolutionDto, rawSolutions[i]);
+    const requests: ExecutionRequestDto[] = [];
+    for (let i = 0; i < rawRequests.length; i++) {
+      const instance = plainToInstance(
+        ExecutionRequestDto,
+        rawRequests[i],
+      );
       const errors = await validate(instance, {
         whitelist: true,
         forbidNonWhitelisted: true,
@@ -44,16 +54,22 @@ export class AutoActionService {
           .map((e) => Object.values(e.constraints || {}))
           .flat();
         throw new BadRequestException(
-          `Invalid solution at index ${i}: ${constraints.join(', ')}`,
+          `Invalid execution request at index ${i}: ${constraints.join(
+            ', ',
+          )}`,
         );
       }
-      solutions.push(instance);
+
+      requests.push(instance);
     }
 
     const results: SolutionExecutionResult[] = [];
-    for (const solution of solutions) {
-      const result = await this.executeSingle(solution);
+
+    for (const req of requests) {
+      const result = await this.executeSingle(req.plan, req);
       results.push(result);
+
+      await this.sendResultToAlertApi(result);
     }
 
     return results;
@@ -61,6 +77,7 @@ export class AutoActionService {
 
   private async executeSingle(
     solution: SolutionDto,
+    request: ExecutionRequestDto,
   ): Promise<SolutionExecutionResult> {
     const precheckResults: StepExecutionResult[] = [];
     const actionResults: StepExecutionResult[] = [];
@@ -86,6 +103,13 @@ export class AutoActionService {
         alertName: solution.alert.name,
         severity: solution.alert.severity,
         instance: solution.alert.instance,
+
+        alertLogId: request.alertLogId,
+        decision: request.decision,
+        approvedBy: request.approvedBy,
+        approvedAt: request.approvedAt,
+        feedback: solution.feedback,
+
         overallStatus,
         precheckResults,
         actionResults,
@@ -93,19 +117,17 @@ export class AutoActionService {
       };
     }
 
-    // actions 실행 (prechecks 모두 성공한 경우)
     let actionFailed = false;
     for (const step of solution.actions || []) {
       const stepResult = await this.runStep(step);
       actionResults.push(stepResult);
       if (stepResult.status === 'FAILED') {
         actionFailed = true;
-        break; 
+        break;
       }
     }
 
     if (!actionFailed) {
-      // actions 모두 성공 → overall SUCCESS
       overallStatus = 'SUCCESS';
       return {
         version: solution.version,
@@ -113,6 +135,13 @@ export class AutoActionService {
         alertName: solution.alert.name,
         severity: solution.alert.severity,
         instance: solution.alert.instance,
+
+        alertLogId: request.alertLogId,
+        decision: request.decision,
+        approvedBy: request.approvedBy,
+        approvedAt: request.approvedAt,
+        feedback: solution.feedback,
+
         overallStatus,
         precheckResults,
         actionResults,
@@ -120,14 +149,12 @@ export class AutoActionService {
       };
     }
 
-    // 3) rollback 실행 (action 실패한 경우만)
     let rollbackFailed = false;
     for (const step of solution.rollback || []) {
       const stepResult = await this.runStep(step);
       rollbackResults.push(stepResult);
       if (stepResult.status === 'FAILED') {
         rollbackFailed = true;
-        // 실패 시 즉시 중단
         break;
       }
     }
@@ -142,6 +169,13 @@ export class AutoActionService {
       alertName: solution.alert.name,
       severity: solution.alert.severity,
       instance: solution.alert.instance,
+
+      alertLogId: request.alertLogId,
+      decision: request.decision,
+      approvedBy: request.approvedBy,
+      approvedAt: request.approvedAt,
+      feedback: solution.feedback,
+
       overallStatus,
       precheckResults,
       actionResults,
@@ -172,6 +206,31 @@ export class AutoActionService {
       finishedAt,
       durationSeconds,
     };
+  }
+
+  private async sendResultToAlertApi(
+    result: SolutionExecutionResult,
+  ): Promise<void> {
+    const url = `http://158.180.90.191:80/alerts/${result.alertId}/result`;
+
+    try {
+      await lastValueFrom(
+        this.httpService.post(url, result, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }),
+      );
+      this.logger.log(
+        `Successfully sent result to Alert API for alertId=${result.alertId}`,
+      );
+    } catch (error: any) {
+      this.logger.error(
+        `Failed to send result to Alert API for alertId=${result.alertId}: ${
+          error?.message || error
+        }`,
+      );
+    }
   }
 }
 

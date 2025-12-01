@@ -1,6 +1,9 @@
+// src/auto-action/dto/solution.dto.ts
 import {
   ArrayMinSize,
   IsArray,
+  IsInt,
+  IsOptional,
   IsString,
   ValidateNested,
 } from 'class-validator';
@@ -15,6 +18,14 @@ export class SolutionDto {
   @ValidateNested()
   @Type(() => AlertDto)
   alert: AlertDto;
+
+  @IsOptional()
+  @IsInt()
+  alertLogId?: number;
+
+  @IsOptional()
+  @IsString()
+  feedback?: string;
 
   @IsArray()
   @ValidateNested({ each: true })

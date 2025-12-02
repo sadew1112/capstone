@@ -94,106 +94,36 @@ export class AutoActionService {
     return results;
   }
 
-  private async executeSingle(
-    solution: SolutionDto,
-    request: ExecutionRequestDto,
-  ): Promise<SolutionExecutionResult> {
-    const precheckResults: StepExecutionResult[] = [];
-    const actionResults: StepExecutionResult[] = [];
-    const rollbackResults: StepExecutionResult[] = [];
+private async executeSingle(
+  solution: SolutionDto,
+  request: ExecutionRequestDto,
+): Promise<SolutionExecutionResult> {
+  const precheckResults: StepExecutionResult[] = [];
+  const actionResults: StepExecutionResult[] = [];
+  const rollbackResults: StepExecutionResult[] = [];
 
-    let precheckFailed = false;
-    for (const step of solution.prechecks || []) {
-      const stepResult = await this.runStep(step);
-      precheckResults.push(stepResult);
-      if (stepResult.status === 'FAILED') {
-        precheckFailed = true;
-        break;
-      }
+  let precheckFailed = false;
+  for (const step of solution.prechecks || []) {
+    const stepResult = await this.runStep(step);
+    precheckResults.push(stepResult);
+    if (stepResult.status === 'FAILED') {
+      precheckFailed = true;
+      break;
     }
+  }
 
-    let overallStatus: SolutionOverallStatus;
+  let overallStatus: SolutionOverallStatus;
 
-    if (precheckFailed) {
-      overallStatus = 'PRECHECK_FAILED';
-      return {
-        version: solution.version,
-        alertId: solution.alert.id,
-        alertName: solution.alert.name,
-        severity: solution.alert.severity,
-        instance: solution.alert.instance,
-
-        alertLogId: request.alertLogId,
-        decision: request.decision,
-        approvedBy: request.approvedBy,
-        approvedAt: request.approvedAt,
-        feedback: solution.feedback,
-
-        overallStatus,
-        precheckResults,
-        actionResults,
-        rollbackResults,
-      };
-    }
-
-    let actionFailed = false;
-    for (const step of solution.actions || []) {
-      const stepResult = await this.runStep(step);
-      actionResults.push(stepResult);
-      if (stepResult.status === 'FAILED') {
-        actionFailed = true;
-        break;
-      }
-    }
-
-    if (!actionFailed) {
-      overallStatus = 'SUCCESS';
-      return {
-        version: solution.version,
-        alertId: solution.alert.id,
-        alertName: solution.alert.name,
-        severity: solution.alert.severity,
-        instance: solution.alert.instance,
-
-        alertLogId: request.alertLogId,
-        decision: request.decision,
-        approvedBy: request.approvedBy,
-        approvedAt: request.approvedAt,
-        feedback: solution.feedback,
-
-        overallStatus,
-        precheckResults,
-        actionResults,
-        rollbackResults,
-      };
-    }
-
-    let rollbackFailed = false;
-    for (const step of solution.rollback || []) {
-      const stepResult = await this.runStep(step);
-      rollbackResults.push(stepResult);
-      if (stepResult.status === 'FAILED') {
-        rollbackFailed = true;
-        break;
-      }
-    }
-
-    overallStatus = rollbackFailed
-      ? 'ACTION_FAILED_ROLLBACK_FAILED'
-      : 'ACTION_FAILED_ROLLBACK_SUCCEEDED';
-
+  if (precheckFailed) {
+    overallStatus = 'PRECHECK_FAILED';
     return {
       version: solution.version,
-      alertId: solution.alert.id,
-      alertName: solution.alert.name,
-      severity: solution.alert.severity,
-      instance: solution.alert.instance,
 
+      alertId: request.alertId,
       alertLogId: request.alertLogId,
       decision: request.decision,
       approvedBy: request.approvedBy,
       approvedAt: request.approvedAt,
-      feedback: solution.feedback,
 
       overallStatus,
       precheckResults,
@@ -201,6 +131,64 @@ export class AutoActionService {
       rollbackResults,
     };
   }
+
+  let actionFailed = false;
+  for (const step of solution.actions || []) {
+    const stepResult = await this.runStep(step);
+    actionResults.push(stepResult);
+    if (stepResult.status === 'FAILED') {
+      actionFailed = true;
+      break;
+    }
+  }
+
+  if (!actionFailed) {
+    overallStatus = 'SUCCESS';
+    return {
+      version: solution.version,
+
+      alertId: request.alertId,
+      alertLogId: request.alertLogId,
+      decision: request.decision,
+      approvedBy: request.approvedBy,
+      approvedAt: request.approvedAt,
+
+      overallStatus,
+      precheckResults,
+      actionResults,
+      rollbackResults,
+    };
+  }
+
+  let rollbackFailed = false;
+  for (const step of solution.rollback || []) {
+    const stepResult = await this.runStep(step);
+    rollbackResults.push(stepResult);
+    if (stepResult.status === 'FAILED') {
+      rollbackFailed = true;
+      break;
+    }
+  }
+
+  overallStatus = rollbackFailed
+    ? 'ACTION_FAILED_ROLLBACK_FAILED'
+    : 'ACTION_FAILED_ROLLBACK_SUCCEEDED';
+
+  return {
+    version: solution.version,
+
+    alertId: request.alertId,
+    alertLogId: request.alertLogId,
+    decision: request.decision,
+    approvedBy: request.approvedBy,
+    approvedAt: request.approvedAt,
+
+    overallStatus,
+    precheckResults,
+    actionResults,
+    rollbackResults,
+  };
+}
 
   private async runStep(step: StepDto): Promise<StepExecutionResult> {
     const {

@@ -9,16 +9,13 @@ export type SolutionOverallStatus =
 
 export interface SolutionExecutionResult {
   version: string;
-  alertId: number;
-  alertName: string;
-  severity: string;
-  instance: string;
 
+  // 식별 정보
+  alertId: number;
   alertLogId: number;
   decision: string;
   approvedBy: string;
   approvedAt: string;
-  feedback?: string;
 
   overallStatus: SolutionOverallStatus;
 
@@ -37,4 +34,5 @@ export interface SolutionOutputResult {
 export interface SolutionOutput {
   result: SolutionOutputResult;
 }
+
 

@@ -17,7 +17,7 @@ export class ExecutionRequestDto {
   @IsIn(['approved']) // 이 모듈까지 온 건 approved만이라고 가정
   decision: string;
 
-  @IsEmail()
+  @IsString()
   approvedBy: string;
 
   @IsISO8601()

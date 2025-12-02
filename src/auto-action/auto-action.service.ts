@@ -243,7 +243,7 @@ private async executeSingle(
   private async sendResultToAlertApi(
     result: SolutionExecutionResult,
   ): Promise<void> {
-    const url = `http://158.180.90.191:80/alerts/${result.alertId}/result`;
+    const url = `http://158.180.90.191:80/api/alerts/${result.alertId}/result`;
 
     const payload = this.buildOutput(result);
 

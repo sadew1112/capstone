@@ -1,9 +1,13 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import { HttpExceptionLoggingFilter } from './auto-action/http-exception-logging.filter';
+
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  app.useGlobalFilters(new HttpExceptionLoggingFilter());
 
   app.useGlobalPipes(
     new ValidationPipe({

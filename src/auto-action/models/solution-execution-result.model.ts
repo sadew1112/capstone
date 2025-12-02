@@ -8,14 +8,12 @@ export type SolutionOverallStatus =
   | 'ACTION_FAILED_ROLLBACK_FAILED';
 
 export interface SolutionExecutionResult {
-  // 플랜 정보
   version: string;
   alertId: number;
   alertName: string;
   severity: string;
   instance: string;
 
-  // 승인/로그 메타 정보
   alertLogId: number;
   decision: string;
   approvedBy: string;
@@ -28,3 +26,15 @@ export interface SolutionExecutionResult {
   actionResults: StepExecutionResult[];
   rollbackResults: StepExecutionResult[];
 }
+
+export interface SolutionOutputResult {
+  overallStatus: SolutionOverallStatus;
+  precheckResults: StepExecutionResult[];
+  actionResults: StepExecutionResult[];
+  rollbackResults: StepExecutionResult[];
+}
+
+export interface SolutionOutput {
+  result: SolutionOutputResult;
+}
+

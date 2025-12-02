@@ -1,24 +1,27 @@
+// src/auto-action/auto-action.service.ts
 import {
-  BadRequestException,
   Injectable,
   Logger,
+  BadRequestException,
 } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { SolutionDto } from './dto/solution.dto';
-import { StepDto } from './dto/step.dto';
-import { ExecutionRequestDto } from './dto/execution-request.dto';
-import { CommandExecutorService } from './command-executor.service';
+
 import {
   SolutionExecutionResult,
   SolutionOverallStatus,
+  SolutionOutput,
 } from './models/solution-execution-result.model';
 import {
   StepExecutionResult,
   StepStatus,
 } from './models/step-execution-result.model';
+import { CommandExecutorService } from './command-executor.service';
+import { ExecutionRequestDto } from './dto/execution-request.dto';
+import { SolutionDto } from './dto/solution.dto';
+import { StepDto } from './dto/step.dto';
 
 @Injectable()
 export class AutoActionService {
@@ -29,6 +32,21 @@ export class AutoActionService {
     private readonly httpService: HttpService,
   ) {}
 
+  /**
+   * 컨트롤러/외부에서 사용하는 진입점:
+   * - rawRequests 배열을 처리하고
+   * - 첫 번째 결과를 기준으로 SolutionOutput 형태로 변환해 반환
+   */
+  async executeAllAndBuildOutput(rawRequests: any): Promise<SolutionOutput> {
+    const results = await this.executeAll(rawRequests);
+    const first = results[0];
+
+    return this.buildOutput(first);
+  }
+
+  /**
+   * 내부용: 모든 요청을 처리해서 풀 정보 결과 배열을 반환
+   */
   async executeAll(
     rawRequests: any,
   ): Promise<SolutionExecutionResult[]> {
@@ -69,6 +87,7 @@ export class AutoActionService {
       const result = await this.executeSingle(req.plan, req);
       results.push(result);
 
+      // Alert API로는 여기에서 개별 결과를 전송
       await this.sendResultToAlertApi(result);
     }
 
@@ -208,14 +227,41 @@ export class AutoActionService {
     };
   }
 
+  /**
+   * 내부 SolutionExecutionResult → 외부로 나갈 최종 형태로 변환
+   * {
+   *   "result": {
+   *     "overallStatus": "...",
+   *     "precheckResults": [...],
+   *     "actionResults": [...],
+   *     "rollbackResults": [...]
+   *   }
+   * }
+   */
+  private buildOutput(result: SolutionExecutionResult): SolutionOutput {
+    return {
+      result: {
+        overallStatus: result.overallStatus,
+        precheckResults: result.precheckResults,
+        actionResults: result.actionResults,
+        rollbackResults: result.rollbackResults,
+      },
+    };
+  }
+
+  /**
+   * Alert API로도 동일한 형태의 JSON을 전송
+   */
   private async sendResultToAlertApi(
     result: SolutionExecutionResult,
   ): Promise<void> {
-    const url = `http://158.180.90.191:80/api/alerts/${result.alertId}/result`;
+    const url = `http://158.180.90.191:80/alerts/${result.alertId}/result`;
+
+    const payload = this.buildOutput(result);
 
     try {
       await lastValueFrom(
-        this.httpService.post(url, result, {
+        this.httpService.post(url, payload, {
           headers: {
             'Content-Type': 'application/json',
           },
@@ -233,4 +279,5 @@ export class AutoActionService {
     }
   }
 }
+
 

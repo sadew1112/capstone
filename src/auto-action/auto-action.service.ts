@@ -1,13 +1,7 @@
 // src/auto-action/auto-action.service.ts
-import {
-  Injectable,
-  Logger,
-  BadRequestException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 
 import {
   SolutionExecutionResult,
@@ -33,89 +27,107 @@ export class AutoActionService {
   ) {}
 
   /**
-   * 컨트롤러/외부에서 사용하는 진입점:
-   * - rawRequests 배열을 처리하고
-   * - 첫 번째 결과를 기준으로 SolutionOutput 형태로 변환해 반환
+   * 컨트롤러에서 바로 호출하는 단일 요청 진입점
+   * - ValidationPipe를 통과한 ExecutionRequestDto만 들어옴
+   * - executeSingle로 실행 → Alert API로 전송 → 외부 응답 형태로 변환
    */
-  async executeAllAndBuildOutput(rawRequests: any): Promise<SolutionOutput> {
-    const results = await this.executeAll(rawRequests);
-    const first = results[0];
+  async executeAndBuildOutput(
+    request: ExecutionRequestDto,
+  ): Promise<SolutionOutput> {
+    const result = await this.executeSingle(request.plan, request);
 
-    return this.buildOutput(first);
+    // Alert API로 개별 결과 전송
+    await this.sendResultToAlertApi(result);
+
+    return this.buildOutput(result);
   }
 
   /**
-   * 내부용: 모든 요청을 처리해서 풀 정보 결과 배열을 반환
+   * 내부: 실제 precheck → action → rollback 실행 로직
    */
-  async executeAll(
-    rawRequests: any,
-  ): Promise<SolutionExecutionResult[]> {
-    if (!Array.isArray(rawRequests) || rawRequests.length === 0) {
-      throw new BadRequestException(
-        'Request body must be a non-empty array of execution requests',
-      );
-    }
+  private async executeSingle(
+    solution: SolutionDto,
+    request: ExecutionRequestDto,
+  ): Promise<SolutionExecutionResult> {
+    const precheckResults: StepExecutionResult[] = [];
+    const actionResults: StepExecutionResult[] = [];
+    const rollbackResults: StepExecutionResult[] = [];
 
-    const requests: ExecutionRequestDto[] = [];
-    for (let i = 0; i < rawRequests.length; i++) {
-      const instance = plainToInstance(
-        ExecutionRequestDto,
-        rawRequests[i],
-      );
-      const errors = await validate(instance, {
-        whitelist: true,
-        forbidNonWhitelisted: true,
-      });
-
-      if (errors.length > 0) {
-        const constraints = errors
-          .map((e) => Object.values(e.constraints || {}))
-          .flat();
-        throw new BadRequestException(
-          `Invalid execution request at index ${i}: ${constraints.join(
-            ', ',
-          )}`,
-        );
+    // 1) Prechecks
+    let precheckFailed = false;
+    for (const step of solution.prechecks || []) {
+      const stepResult = await this.runStep(step);
+      precheckResults.push(stepResult);
+      if (stepResult.status === 'FAILED') {
+        precheckFailed = true;
+        break;
       }
-
-      requests.push(instance);
     }
 
-    const results: SolutionExecutionResult[] = [];
+    let overallStatus: SolutionOverallStatus;
 
-    for (const req of requests) {
-      const result = await this.executeSingle(req.plan, req);
-      results.push(result);
+    if (precheckFailed) {
+      overallStatus = 'PRECHECK_FAILED';
+      return {
+        version: solution.version,
 
-      // Alert API로는 여기에서 개별 결과를 전송
-      await this.sendResultToAlertApi(result);
+        alertId: request.alertId,
+        alertLogId: request.alertLogId,
+        decision: request.decision,
+        approvedBy: request.approvedBy,
+        approvedAt: request.approvedAt,
+
+        overallStatus,
+        precheckResults,
+        actionResults,
+        rollbackResults,
+      };
     }
 
-    return results;
-  }
-
-private async executeSingle(
-  solution: SolutionDto,
-  request: ExecutionRequestDto,
-): Promise<SolutionExecutionResult> {
-  const precheckResults: StepExecutionResult[] = [];
-  const actionResults: StepExecutionResult[] = [];
-  const rollbackResults: StepExecutionResult[] = [];
-
-  let precheckFailed = false;
-  for (const step of solution.prechecks || []) {
-    const stepResult = await this.runStep(step);
-    precheckResults.push(stepResult);
-    if (stepResult.status === 'FAILED') {
-      precheckFailed = true;
-      break;
+    // 2) Actions
+    let actionFailed = false;
+    for (const step of solution.actions || []) {
+      const stepResult = await this.runStep(step);
+      actionResults.push(stepResult);
+      if (stepResult.status === 'FAILED') {
+        actionFailed = true;
+        break;
+      }
     }
-  }
 
-  let overallStatus: SolutionOverallStatus;
+    if (!actionFailed) {
+      overallStatus = 'SUCCESS';
+      return {
+        version: solution.version,
 
-  if (precheckFailed) {
-    overallStatus = 'PRECHECK_FAILED';
+        alertId: request.alertId,
+        alertLogId: request.alertLogId,
+        decision: request.decision,
+        approvedBy: request.approvedBy,
+        approvedAt: request.approvedAt,
+
+        overallStatus,
+        precheckResults,
+        actionResults,
+        rollbackResults,
+      };
+    }
+
+    // 3) Rollback
+    let rollbackFailed = false;
+    for (const step of solution.rollback || []) {
+      const stepResult = await this.runStep(step);
+      rollbackResults.push(stepResult);
+      if (stepResult.status === 'FAILED') {
+        rollbackFailed = true;
+        break;
+      }
+    }
+
+    overallStatus = rollbackFailed
+      ? 'ACTION_FAILED_ROLLBACK_FAILED'
+      : 'ACTION_FAILED_ROLLBACK_SUCCEEDED';
+
     return {
       version: solution.version,
 
@@ -131,64 +143,6 @@ private async executeSingle(
       rollbackResults,
     };
   }
-
-  let actionFailed = false;
-  for (const step of solution.actions || []) {
-    const stepResult = await this.runStep(step);
-    actionResults.push(stepResult);
-    if (stepResult.status === 'FAILED') {
-      actionFailed = true;
-      break;
-    }
-  }
-
-  if (!actionFailed) {
-    overallStatus = 'SUCCESS';
-    return {
-      version: solution.version,
-
-      alertId: request.alertId,
-      alertLogId: request.alertLogId,
-      decision: request.decision,
-      approvedBy: request.approvedBy,
-      approvedAt: request.approvedAt,
-
-      overallStatus,
-      precheckResults,
-      actionResults,
-      rollbackResults,
-    };
-  }
-
-  let rollbackFailed = false;
-  for (const step of solution.rollback || []) {
-    const stepResult = await this.runStep(step);
-    rollbackResults.push(stepResult);
-    if (stepResult.status === 'FAILED') {
-      rollbackFailed = true;
-      break;
-    }
-  }
-
-  overallStatus = rollbackFailed
-    ? 'ACTION_FAILED_ROLLBACK_FAILED'
-    : 'ACTION_FAILED_ROLLBACK_SUCCEEDED';
-
-  return {
-    version: solution.version,
-
-    alertId: request.alertId,
-    alertLogId: request.alertLogId,
-    decision: request.decision,
-    approvedBy: request.approvedBy,
-    approvedAt: request.approvedAt,
-
-    overallStatus,
-    precheckResults,
-    actionResults,
-    rollbackResults,
-  };
-}
 
   private async runStep(step: StepDto): Promise<StepExecutionResult> {
     const {
@@ -215,17 +169,6 @@ private async executeSingle(
     };
   }
 
-  /**
-   * 내부 SolutionExecutionResult → 외부로 나갈 최종 형태로 변환
-   * {
-   *   "result": {
-   *     "overallStatus": "...",
-   *     "precheckResults": [...],
-   *     "actionResults": [...],
-   *     "rollbackResults": [...]
-   *   }
-   * }
-   */
   private buildOutput(result: SolutionExecutionResult): SolutionOutput {
     return {
       result: {
@@ -237,9 +180,6 @@ private async executeSingle(
     };
   }
 
-  /**
-   * Alert API로도 동일한 형태의 JSON을 전송
-   */
   private async sendResultToAlertApi(
     result: SolutionExecutionResult,
   ): Promise<void> {
@@ -267,5 +207,3 @@ private async executeSingle(
     }
   }
 }
-
-

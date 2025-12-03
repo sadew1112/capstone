@@ -2,6 +2,7 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { AutoActionService } from './auto-action.service';
 import { SolutionOutput } from './models/solution-execution-result.model';
+import { ExecutionRequestDto } from './dto/execution-request.dto';
 
 @Controller()
 export class AutoActionController {
@@ -9,10 +10,12 @@ export class AutoActionController {
 
   @Post('aam')
   async execute(
-    @Body() body: any,
+    @Body() body: ExecutionRequestDto, // 🚩 단일 DTO로 받기
   ): Promise<SolutionOutput> {
-    return this.autoActionService.executeAllAndBuildOutput(body);
+    // Global ValidationPipe가 ExecutionRequestDto + 중첩 plan 까지 검증해줌
+    return this.autoActionService.executeAndBuildOutput(body);
   }
 }
+
 
 
